@@ -25,6 +25,7 @@ README: This implementation optimizes the cooperative loading of the input signa
         This should decrease the number of both load and store instructions, leading to improved overall throughput. 
         The kernel still uses constant memory forthe convolution kernel for fast access during the convolution computation, 
         I can't yet find a way to make that faster / better. 
+        This kernel (at the time of writing), is at #6 on the global leaderboard for 1D convolution on T4.
 */
 #include <cuda_runtime.h>
 #define BASE_THREAD_NUM 448
@@ -44,7 +45,7 @@ __global__ void ConvKernel(const float* __restrict__ A, float* __restrict__ out,
     // ie block's first thread position in the global array - half the kernel size
     const int baseofs = (blockIdx.x * blockDim.x) - radius;
     
-    // Vectorized cooperative load using float4
+        // Vectorized cooperative load using float4
     const int region_size_aligned = (region_size / 4) * 4;
     
     // Load using float4 for better memory throughput
@@ -77,7 +78,7 @@ __global__ void ConvKernel(const float* __restrict__ A, float* __restrict__ out,
         }
         block_shared_A[s] = v;
     }
-    
+
     __syncthreads();
     
     if(gid >= out_size) return;
