@@ -1,15 +1,22 @@
 /*
-SUBMISSION RESULT: ACCEPTED 
-Avg runtime: 720.97 ms
-Avg gflops: 716.30
+BENCHMARK RESULTS 
+═════════════════════════════════════════════════════════════════
+Metric                              Value
+─────────────────────────────────────────────────────────────────
+Total Benchmarks:                       4
+Average GFLOPS:                    923.14
+Average Runtime:                   560.97 ms
+═════════════════════════════════════════════════════════════════
 
 Detailed Results:
 Test Case                          GFLOPS    Runtime (ms)          Status
 ───────────────────────────────────────────────────────────────────────────
-✓ 1   4096x4096 x 4096x4096        722.52        190.2288          PASSED
-✓ 2   8192x8192 x 8192x4096        723.79        759.5620          PASSED
-✓ 3   4096x4096 x 4096x8192        707.49        388.5482          PASSED
-✓ 4   8192x8192 x 8192x8192        711.42       1545.5266          PASSED
+✓ 1   4096x4096 x 4096x4096        934.58        147.0616          PASSED
+✓ 2   8192x8192 x 8192x4096        928.56        592.1361          PASSED
+✓ 3   4096x4096 x 4096x8192        916.87        299.8114          PASSED
+✓ 4   8192x8192 x 8192x8192        912.55       1204.8848          PASSED
+
+Benchmark completed successfully!
 
 README: This implementation uses shared memory to optimize matrix multiplication.
         Each thread block computes a TILESIZE x TILESIZE sub-matrix of the output.
