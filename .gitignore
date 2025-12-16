@@ -1,0 +1,35 @@
+# Python bytecode / build
+__pycache__/
+*.py[cod]
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+.env/
+
+# CUDA / PyTorch extension artefacts
+matmul/build_artifacts/
+*/build_artifacts/
+*.so
+*.ptx
+*.cubin
+*.sass
+*.o
+*.obj
+*.dSYM/
+*.nsys-rep
+*.qdrep
+*.nvvp
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store

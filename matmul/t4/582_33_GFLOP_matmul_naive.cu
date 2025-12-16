@@ -27,7 +27,7 @@ README: This is a naive implementation of matrix multiplication in CUDA.
 #include <cuda_runtime.h>
 #define SQRTBLOCKSIZE 32
 
-__global__ void NaiveMatmulKernel(
+__global__ void MatmulKernel(
   const float* __restrict__ a, 
   const float* __restrict__ b,
   float* __restrict__ out, 
@@ -68,5 +68,5 @@ extern "C" void solution(const float* input_a, const float* input_b, float* outp
   
   dim3 gridSize(grid_x, grid_y);  // number of thread blocks
   dim3 blockSize(SQRTBLOCKSIZE, SQRTBLOCKSIZE);
-  NaiveMatmulKernel<<<gridSize, blockSize>>>(input_a, input_b, output_c, (int)m, (int)n, (int)k);
+  MatmulKernel<<<gridSize, blockSize>>>(input_a, input_b, output_c, (int)m, (int)n, (int)k);
 }
