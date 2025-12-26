@@ -92,31 +92,32 @@ __global__ void MatmulKernel(const float *__restrict__ a,
         }
       }
     }  
+    __syncthreads(); // ensure that the input tiles are fully loaded
+  
+    // This thread is responsible for a patch of the output tile of dim
+    // ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD. 
+    // horizontally adjacent psums use the same row, 
+    // vertically adjacent psums use the same column, maybe some reuse opportunity here later.
+    for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
+      for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
+        int a_tile_row = shared_A_input_tile_row + i;
+        int b_tile_col = shared_B_input_tile_col + j;
+        for(int k = 0; k<TILESIZE; ++k){
+          partial_sums[i][j] += shared_a[a_tile_row][k] * shared_b[k][b_tile_col];
+        }
+      }
+    }
+  
+    // write to global
+    for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
+      for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
+        if(out_row + i < M && out_col + j < N){
+          out[(out_row+i)*N + (out_col+j)] = partial_sums[i][j];
+        }
+      }
+    }
   }
   __syncthreads(); // ensure that the input tiles are fully loaded
-
-  // This thread is responsible for a patch of the output tile of dim
-  // ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD. 
-  // horizontally adjacent psums use the same row, 
-  // vertically adjacent psums use the same column, maybe some reuse opportunity here later.
-  for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
-    for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
-      int a_tile_row = shared_A_input_tile_row + i;
-      int b_tile_col = shared_B_input_tile_col + j;
-      for(int k = 0; k<TILESIZE; ++k){
-        partial_sums[i][j] += shared_a[a_tile_row][k] * shared_b[k][b_tile_col];
-      }
-    }
-  }
-
-  // write to global
-  for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
-    for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
-      if(out_row + i < M && out_col + j < N){
-        out[(out_row+i)*N + (out_col+j)] = partial_sums[i][j];
-      }
-    }
-  }
 
 }
 
