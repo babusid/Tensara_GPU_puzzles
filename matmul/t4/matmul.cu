@@ -107,18 +107,15 @@ __global__ void MatmulKernel(const float *__restrict__ a,
         }
       }
     }
-  
-    // write to global
-    for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
-      for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
-        if(out_row + i < M && out_col + j < N){
-          out[(out_row+i)*N + (out_col+j)] = partial_sums[i][j];
-        }
+    __syncthreads(); // make sure partial sum is finished
+  }
+  for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
+    for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
+      if(out_row + i < M && out_col + j < N){
+        out[(out_row+i)*N + (out_col+j)] = partial_sums[i][j];
       }
     }
   }
-  __syncthreads(); // ensure that the input tiles are fully loaded
-
 }
 
 // Note: input_a, input_b, output_c are all device pointers to float32 arrays
