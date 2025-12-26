@@ -31,56 +31,45 @@ performance.
 __global__ void MatmulKernel(const float *__restrict__ a,
                              const float *__restrict__ b,
                              float *__restrict__ out, const int M, const int N,
-                             const int K) {
-
-  // These give the base output indices for this thread
-  // Each thread computes ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD elements
-  // Each block computes a TILESIZE x TILESIZE tile of the output matrix
-  int out_col = blockIdx.x * TILESIZE + (threadIdx.x * ELEMENTS_PER_THREAD);
-  int out_row = blockIdx.y * TILESIZE + (threadIdx.y * ELEMENTS_PER_THREAD);
+                             const int K) 
+{
 
   float partial_sums[ELEMENTS_PER_THREAD][ELEMENTS_PER_THREAD] = {0};
 
   // Shared memory for tiles of A and B
   __shared__ float shared_a[TILESIZE][TILESIZE];
   __shared__ float shared_b[TILESIZE][TILESIZE];
+  
+  // These give the base output indices for this thread
+  // Each thread computes ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD elements
+  // Each block computes a TILESIZE x TILESIZE tile of the output matrix
+  int out_row = blockIdx.y * TILESIZE + (threadIdx.y * ELEMENTS_PER_THREAD);
+  int out_col = blockIdx.x * TILESIZE + (threadIdx.x * ELEMENTS_PER_THREAD);
 
+  // Shared memory indices to indicate where to store the loaded global data.
+  // Acts as base offsets for this thread to store into the sub-patch of shared mem
+  // it is responsible for.
+  int shared_A_input_tile_row = threadIdx.y * ELEMENTS_PER_THREAD;
+  int shared_B_input_tile_col = threadIdx.x * ELEMENTS_PER_THREAD;
+    
+  #pragma unroll
   for (int tile_k_start = 0; tile_k_start < K; tile_k_start += TILESIZE) {
-
-    // Shared memory indices for loading input tiles into shared memory
-    // we don't have to worry about block offsetting here, every block has its
-    // own shared memory, and should be symmetric.
-    int shared_A_input_tile_row = threadIdx.y * ELEMENTS_PER_THREAD;
-    int shared_B_input_tile_col = threadIdx.x * ELEMENTS_PER_THREAD;
-
-    // Global indices for loading input tiles
-    // We use block index to find the patch in the output matrix this
-    // threadblock is responsible for and then offset by thread index to find
-    // which small patch of that ouptut tile this thread is responsible for
-    // computing
-    int global_A_input_tile_row =
-        (blockIdx.y * TILESIZE) +
-        (shared_A_input_tile_row); // this is the base row for A tile load
-    int global_B_input_tile_col =
-        (blockIdx.x * TILESIZE) +
-        (shared_B_input_tile_col); // this is the base col for B tile load
-
-    // we need to get a 2x2 patch of values from A, where
-    // global_A_input_tile_row corresponds to the top left of the patch. This
-    // patch should be stored in shared_a at threadIdx.y*ELEMENTS_PER_THREAD,
-    // threadIdx.x*ELEMENTS_PER_THREAD
+  // we need to get a TILESIZExTILESIZE input tile of values from A,B
+  // each thread needs to load a sub-patch of this input tile
+    #pragma unroll
     for (int i = 0; i < ELEMENTS_PER_THREAD; ++i) {
+      #pragma unroll
       for (int j = 0; j < ELEMENTS_PER_THREAD; ++j) {
-        // double loop allows us to do a 2x2 patch
 
         // take the base global row for A tile load, and offset by i to get the
-        // correct row in the patch to load
-        int a_row = global_A_input_tile_row + i;
+        // correct row in the patch to load from. The output's row is the same as the row in matrix A.
+        int a_row = out_row + i;
 
-        // tile_k_start gives the starting column for the A input tile load.
-        // Offset by threadIdx.x*ELEMENTS_PER_THREAD to get the base col for
-        // this thread then offset by j to get the correct col in the patch to
-        // load
+        // tile_k_start gives the starting column for the full input tile from
+        // A, since we are iterating left to right across A. We offset this with
+        // the thread offset to isolate the starting column for the sub-patch
+        // this thread is responsible for. We then offset with to iterate from
+        // that starting column forward as we progress through the loop
         int a_col = tile_k_start + (threadIdx.x * ELEMENTS_PER_THREAD) + j;
         if (a_row < M && a_col < K) {
           shared_a[shared_A_input_tile_row + i]
@@ -93,7 +82,7 @@ __global__ void MatmulKernel(const float *__restrict__ a,
 
         // similar logic for B matrix
         int b_row = tile_k_start + (threadIdx.y * ELEMENTS_PER_THREAD) + i;
-        int b_col = global_B_input_tile_col + j;
+        int b_col = out_col + j;
         if (b_row < K && b_col < N) {
           shared_b[threadIdx.y * ELEMENTS_PER_THREAD + i]
                   [shared_B_input_tile_col + j] = b[b_row * N + b_col];
@@ -102,19 +91,33 @@ __global__ void MatmulKernel(const float *__restrict__ a,
                   [shared_B_input_tile_col + j] = 0.0f;
         }
       }
-    }
-    __syncthreads(); // ensure the tile is loaded before computation
+    }  
+  }
+  __syncthreads(); // ensure that the input tiles are fully loaded
 
-    // Compute partial sums for the TILESIZE x TILESIZE tile.
-    // To do this, we want to prefetch 2x2 patches from the shared memory input
-    // tiles
-
-    for (int k = 0; k < TILESIZE; k += ELEMENTS_PER_THREAD) {
-      // Prefetch a 2x2 patch from shared_a and shared_b
-      float a_values[ELEMENTS_PER_THREAD][ELEMENTS_PER_THREAD];
-      float b_values[ELEMENTS_PER_THREAD][ELEMENTS_PER_THREAD];
+  // This thread is responsible for a patch of the output tile of dim
+  // ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD. 
+  // horizontally adjacent psums use the same row, 
+  // vertically adjacent psums use the same column, maybe some reuse opportunity here later.
+  for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
+    for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
+      int a_tile_row = shared_A_input_tile_row + i;
+      int b_tile_col = shared_B_input_tile_col + j;
+      for(int k = 0; k<TILESIZE; ++k){
+        partial_sums[i][j] += shared_a[a_tile_row][k] * shared_b[k][b_tile_col];
+      }
     }
   }
+
+  // write to global
+  for(int i = 0; i<ELEMENTS_PER_THREAD;++i){
+    for(int j = 0; j<ELEMENTS_PER_THREAD;++j){
+      if(out_row + i < M && out_col + j < N){
+        out[(out_row+i)*N + (out_col+j)] = partial_sums[i][j];
+      }
+    }
+  }
+
 }
 
 // Note: input_a, input_b, output_c are all device pointers to float32 arrays
@@ -133,3 +136,4 @@ extern "C" void solution(const float *input_a, const float *input_b,
   MatmulKernel<<<gridSize, blockSize>>>(input_a, input_b, output_c, (int)m,
                                         (int)n, (int)k);
 }
+
