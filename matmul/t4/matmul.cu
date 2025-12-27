@@ -1,10 +1,10 @@
 #include <cuda_runtime.h>
 #define BLOCKSIZE                                                              \
-  16 // number of threads in each dimension of a block (block will have 16x16 =
+  8 // number of threads in each dimension of a block (block will have 16x16 =
      // 256
      // threads)
 #define ELEMENTS_PER_THREAD                                                    \
-  2 // how many output elements each thread computes (2x2)
+  4 // how many output elements each thread computes (2x2)
 #define TILESIZE                                                               \
   (BLOCKSIZE * ELEMENTS_PER_THREAD) // how many output elements calculated by a
                                     // threadblock in a dimension
@@ -13,16 +13,17 @@
 #define TILE_WIDTH_VECS (TILESIZE / 4) // Width of tile in float4s
 #define TOTAL_VECS ((TILESIZE * TILESIZE) / 4)
 #define VECS_PER_THREAD (TOTAL_VECS / NUM_THREADS)
+#define PADDING 2 // Pad width to avoid bank conflicts (32+2 = 34 stride)
 
-__global__ void MatmulKernel(const float *__restrict__ a,
+__global__ void __launch_bounds__(BLOCKSIZE * BLOCKSIZE) MatmulKernel(const float *__restrict__ a,
                              const float *__restrict__ b,
                              float *__restrict__ out, const int M, const int N,
                              const int K) {
   float partial_sums[ELEMENTS_PER_THREAD][ELEMENTS_PER_THREAD] = {0};
 
   // Shared memory for tiles of A and B
-  __shared__ float shared_a[TILESIZE][TILESIZE];
-  __shared__ float shared_b[TILESIZE][TILESIZE];
+  __shared__ float shared_a[TILESIZE][TILESIZE+PADDING];
+  __shared__ float shared_b[TILESIZE][TILESIZE+PADDING];
 
   // These give the base output indices for this thread
   // Each thread computes ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD elements
@@ -48,44 +49,46 @@ __global__ void MatmulKernel(const float *__restrict__ a,
   for (int tile_k_start = 0; tile_k_start < K; tile_k_start += TILESIZE) {
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
 
-    // Iterate over the chunks this thread is responsible for
     #pragma unroll
     for (int v = 0; v < VECS_PER_THREAD; ++v) {
-        
-        // 1. Calculate Linear Vector Index
-        // Stride is NUM_THREADS. 
-        // Example: If 256 threads, Thread 0 handles vector 0, 256, 512...
         int vec_idx = tid + (v * NUM_THREADS);
-
-        // 2. Map Linear Vector Index to 2D Tile Coordinates
-        // We treat the tile as a grid of dimensions: [TILESIZE] x [TILESIZE/4]
+        
+        // Map to logical 2D tile coordinates (0..31)
         int row = vec_idx / TILE_WIDTH_VECS;  
-        int vec_col = vec_idx % TILE_WIDTH_VECS; 
-        int col = vec_col * 4; // Convert vector column back to float column
+        int col = (vec_idx % TILE_WIDTH_VECS) * 4; 
 
         // --- LOAD A ---
         int global_a_row = (blockIdx.y * TILESIZE) + row;
         int global_a_col = tile_k_start + col;
-
+        
+        // 1. Vector Load from Global (Fast)
+        float4 vec_a = make_float4(0.f, 0.f, 0.f, 0.f);
         if (global_a_row < M && global_a_col < K) {
-             const float4* global_ptr = reinterpret_cast<const float4*>(
-                 &a[global_a_row * K + global_a_col]);
-             shared_a_vec[vec_idx] = __ldg(global_ptr);
-        } else {
-             shared_a_vec[vec_idx] = make_float4(0.f, 0.f, 0.f, 0.f);
+             vec_a = __ldg(reinterpret_cast<const float4*>(&a[global_a_row * K + global_a_col]));
         }
+
+        // 2. Manual Unpack to Shared (Preserves Padding)
+        // Accessing [row][col] automatically handles the stride of 34
+        shared_a[row][col + 0] = vec_a.x;
+        shared_a[row][col + 1] = vec_a.y;
+        shared_a[row][col + 2] = vec_a.z;
+        shared_a[row][col + 3] = vec_a.w;
+
 
         // --- LOAD B ---
         int global_b_row = tile_k_start + row;
         int global_b_col = (blockIdx.x * TILESIZE) + col;
 
+        float4 vec_b = make_float4(0.f, 0.f, 0.f, 0.f);
         if (global_b_row < K && global_b_col < N) {
-             const float4* global_ptr = reinterpret_cast<const float4*>(
-                 &b[global_b_row * N + global_b_col]);
-             shared_b_vec[vec_idx] = __ldg(global_ptr);
-        } else {
-             shared_b_vec[vec_idx] = make_float4(0.f, 0.f, 0.f, 0.f);
+             vec_b = __ldg(reinterpret_cast<const float4*>(&b[global_b_row * N + global_b_col]));
         }
+
+        // Manual Unpack B
+        shared_b[row][col + 0] = vec_b.x;
+        shared_b[row][col + 1] = vec_b.y;
+        shared_b[row][col + 2] = vec_b.z;
+        shared_b[row][col + 3] = vec_b.w;
     }
     
     __syncthreads();
