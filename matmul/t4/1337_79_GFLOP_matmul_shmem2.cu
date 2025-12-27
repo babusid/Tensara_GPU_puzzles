@@ -1,4 +1,4 @@
-
+// README: builds on the prior shmem version, but now each thread computes a 2x2 patch of output.
 
 #include <cuda_runtime.h>
 #define BLOCKSIZE                                                              \
