@@ -9,6 +9,11 @@
   (BLOCKSIZE * ELEMENTS_PER_THREAD) // how many output elements calculated by a
                                     // threadblock in a dimension
 
+#define NUM_THREADS (BLOCKSIZE * BLOCKSIZE)
+#define TILE_WIDTH_VECS (TILESIZE / 4) // Width of tile in float4s
+#define TOTAL_VECS ((TILESIZE * TILESIZE) / 4)
+#define VECS_PER_THREAD (TOTAL_VECS / NUM_THREADS)
+
 __global__ void MatmulKernel(const float *__restrict__ a,
                              const float *__restrict__ b,
                              float *__restrict__ out, const int M, const int N,
@@ -31,47 +36,59 @@ __global__ void MatmulKernel(const float *__restrict__ a,
   int shared_A_input_tile_row = threadIdx.y * ELEMENTS_PER_THREAD;
   int shared_B_input_tile_col = threadIdx.x * ELEMENTS_PER_THREAD;
 
-#pragma unroll
+  int tid = threadIdx.y * blockDim.x +
+            threadIdx.x; // linear thread id within the block
+  int elements_to_load =
+      (TILESIZE * TILESIZE) /
+      (BLOCKSIZE * BLOCKSIZE); // how many elements each thread has to load
+
+  float4* shared_a_vec = reinterpret_cast<float4*>(&shared_a[0][0]);
+  float4* shared_b_vec = reinterpret_cast<float4*>(&shared_b[0][0]);
+  
   for (int tile_k_start = 0; tile_k_start < K; tile_k_start += TILESIZE) {
-    // we need to get a TILESIZExTILESIZE input tile of values from A,B
-    // each thread needs to load a sub-patch of this input tile
-#pragma unroll
-    for (int i = 0; i < ELEMENTS_PER_THREAD; ++i) {
-#pragma unroll
-      for (int j = 0; j < ELEMENTS_PER_THREAD; ++j) {
+    int tid = threadIdx.y * blockDim.x + threadIdx.x;
 
-        // take the base global row for A tile load, and offset by i to get the
-        // correct row in the patch to load from. The output's row is the same
-        // as the row in matrix A.
-        int a_row = out_row + i;
+    // Iterate over the chunks this thread is responsible for
+    #pragma unroll
+    for (int v = 0; v < VECS_PER_THREAD; ++v) {
+        
+        // 1. Calculate Linear Vector Index
+        // Stride is NUM_THREADS. 
+        // Example: If 256 threads, Thread 0 handles vector 0, 256, 512...
+        int vec_idx = tid + (v * NUM_THREADS);
 
-        // tile_k_start gives the starting column for the full input tile from
-        // A, since we are iterating left to right across A. We offset this with
-        // the thread offset to isolate the starting column for the sub-patch
-        // this thread is responsible for. We then offset with to iterate from
-        // that starting column forward as we progress through the loop
-        int a_col = tile_k_start + (threadIdx.x * ELEMENTS_PER_THREAD) + j;
-        if (a_row < M && a_col < K) {
-          shared_a[shared_A_input_tile_row + i]
-                  [threadIdx.x * ELEMENTS_PER_THREAD + j] = __ldg(&a[a_row * K + a_col]);
+        // 2. Map Linear Vector Index to 2D Tile Coordinates
+        // We treat the tile as a grid of dimensions: [TILESIZE] x [TILESIZE/4]
+        int row = vec_idx / TILE_WIDTH_VECS;  
+        int vec_col = vec_idx % TILE_WIDTH_VECS; 
+        int col = vec_col * 4; // Convert vector column back to float column
+
+        // --- LOAD A ---
+        int global_a_row = (blockIdx.y * TILESIZE) + row;
+        int global_a_col = tile_k_start + col;
+
+        if (global_a_row < M && global_a_col < K) {
+             const float4* global_ptr = reinterpret_cast<const float4*>(
+                 &a[global_a_row * K + global_a_col]);
+             shared_a_vec[vec_idx] = __ldg(global_ptr);
         } else {
-          shared_a[shared_A_input_tile_row + i]
-                  [threadIdx.x * ELEMENTS_PER_THREAD + j] = 0.0f;
+             shared_a_vec[vec_idx] = make_float4(0.f, 0.f, 0.f, 0.f);
         }
 
-        // similar logic for B matrix
-        int b_row = tile_k_start + (threadIdx.y * ELEMENTS_PER_THREAD) + i;
-        int b_col = out_col + j;
-        if (b_row < K && b_col < N) {
-          shared_b[threadIdx.y * ELEMENTS_PER_THREAD + i]
-                  [shared_B_input_tile_col + j] = __ldg(&b[b_row * N + b_col]);
+        // --- LOAD B ---
+        int global_b_row = tile_k_start + row;
+        int global_b_col = (blockIdx.x * TILESIZE) + col;
+
+        if (global_b_row < K && global_b_col < N) {
+             const float4* global_ptr = reinterpret_cast<const float4*>(
+                 &b[global_b_row * N + global_b_col]);
+             shared_b_vec[vec_idx] = __ldg(global_ptr);
         } else {
-          shared_b[threadIdx.y * ELEMENTS_PER_THREAD + i]
-                  [shared_B_input_tile_col + j] = 0.0f;
+             shared_b_vec[vec_idx] = make_float4(0.f, 0.f, 0.f, 0.f);
         }
-      }
     }
-    __syncthreads(); // ensure that the input tiles are fully loaded
+    
+    __syncthreads();
 
     // This thread is responsible for a patch of the output tile of dim
     // ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD.
