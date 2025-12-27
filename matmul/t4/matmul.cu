@@ -53,8 +53,7 @@ __global__ void MatmulKernel(const float *__restrict__ a,
         int a_col = tile_k_start + (threadIdx.x * ELEMENTS_PER_THREAD) + j;
         if (a_row < M && a_col < K) {
           shared_a[shared_A_input_tile_row + i]
-                  [threadIdx.x * ELEMENTS_PER_THREAD + j] =
-                      a[a_row * K + a_col];
+                  [threadIdx.x * ELEMENTS_PER_THREAD + j] = __ldg(&a[a_row * K + a_col]);
         } else {
           shared_a[shared_A_input_tile_row + i]
                   [threadIdx.x * ELEMENTS_PER_THREAD + j] = 0.0f;
@@ -65,7 +64,7 @@ __global__ void MatmulKernel(const float *__restrict__ a,
         int b_col = out_col + j;
         if (b_row < K && b_col < N) {
           shared_b[threadIdx.y * ELEMENTS_PER_THREAD + i]
-                  [shared_B_input_tile_col + j] = b[b_row * N + b_col];
+                  [shared_B_input_tile_col + j] = __ldg(&b[b_row * N + b_col]);
         } else {
           shared_b[threadIdx.y * ELEMENTS_PER_THREAD + i]
                   [shared_B_input_tile_col + j] = 0.0f;
