@@ -90,15 +90,41 @@ __global__ void __launch_bounds__(BLOCKSIZE * BLOCKSIZE) MatmulKernel(const floa
 
     // This thread is responsible for a patch of the output tile of dim
     // ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD.
-    for (int i = 0; i < ELEMENTS_PER_THREAD; ++i) {
-      for (int j = 0; j < ELEMENTS_PER_THREAD; ++j) {
-        int a_tile_row = shared_A_input_tile_row + i;
-        int b_tile_col = shared_B_input_tile_col + j;
-        for (int k = 0; k < TILESIZE; ++k) {
-          partial_sums[i][j] +=
-              shared_a[a_tile_row][k] * shared_b[k][b_tile_col];
+    // for (int i = 0; i < ELEMENTS_PER_THREAD; ++i) {
+    //   for (int j = 0; j < ELEMENTS_PER_THREAD; ++j) {
+    //     int a_tile_row = shared_A_input_tile_row + i;
+    //     int b_tile_col = shared_B_input_tile_col + j;
+    //     for (int k = 0; k < TILESIZE; ++k) {
+    //       partial_sums[i][j] +=
+    //           shared_a[a_tile_row][k] * shared_b[k][b_tile_col];
+    //     }
+    //   }
+    // }
+    #pragma unroll
+    for (int k = 0; k < TILESIZE; ++k) {
+        // 1. Load Fragments into Registers
+        // These arrays will be mapped directly to registers by the compiler
+        float frag_a[ELEMENTS_PER_THREAD];
+        float frag_b[ELEMENTS_PER_THREAD];
+
+        #pragma unroll
+        for (int i = 0; i < ELEMENTS_PER_THREAD; ++i) {
+            frag_a[i] = shared_a[shared_A_input_tile_row + i][k];
         }
-      }
+
+        #pragma unroll
+        for (int j = 0; j < ELEMENTS_PER_THREAD; ++j) {
+            frag_b[j] = shared_b[k][shared_B_input_tile_col + j];
+        }
+
+        // 2. Compute Outer Product
+        #pragma unroll
+        for (int i = 0; i < ELEMENTS_PER_THREAD; ++i) {
+            #pragma unroll
+            for (int j = 0; j < ELEMENTS_PER_THREAD; ++j) {
+                partial_sums[i][j] += frag_a[i] * frag_b[j];
+            }
+        }
     }
     __syncthreads(); // make sure partial sum is finished
   }
