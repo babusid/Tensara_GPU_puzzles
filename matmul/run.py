@@ -28,6 +28,9 @@ from typing import Iterable, List, Sequence, Tuple
 
 import torch
 from torch.utils.cpp_extension import load_inline
+# Disable TF32 to compare true FP32 vs FP32
+torch.backends.cuda.matmul.allow_tf32 = False 
+torch.backends.cudnn.allow_tf32 = False
 
 
 THIS_DIR = pathlib.Path(__file__).resolve().parent
@@ -40,13 +43,17 @@ PRESETS = {
         (128, 128, 128),
         (256, 256, 256),
         (512, 512, 512),
-    ],
-    "tensara": [
         (1024, 1024, 1024),
         (2048, 2048, 1024),
-        (4096, 4096, 4096),
+    ],
+    "tensara": [
+        # (4096, 4096, 4096),
+        # (8192, 8192, 4096),
+        # (4096, 4096, 8192),
+        (8192, 8192, 8192),
     ],
 }
+PRESETS["exhaustive"] = PRESETS["quick"] + PRESETS["tensara"]
 
 
 def list_available_kernels() -> List[pathlib.Path]:

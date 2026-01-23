@@ -13,7 +13,7 @@
 #define TILE_WIDTH_VECS (TILESIZE / 4) // Width of tile in float4s
 #define TOTAL_VECS ((TILESIZE * TILESIZE) / 4)
 #define VECS_PER_THREAD (TOTAL_VECS / NUM_THREADS)
-#define PADDING 2 // Pad width to avoid bank conflicts (32+2 = 34 stride)
+#define PADDING 4 // Pad width to avoid bank conflicts (32+2 = 34 stride)
 
 __global__ void __launch_bounds__(BLOCKSIZE * BLOCKSIZE) MatmulKernel(const float *__restrict__ a,
                              const float *__restrict__ b,
@@ -42,9 +42,6 @@ __global__ void __launch_bounds__(BLOCKSIZE * BLOCKSIZE) MatmulKernel(const floa
   int elements_to_load =
       (TILESIZE * TILESIZE) /
       (BLOCKSIZE * BLOCKSIZE); // how many elements each thread has to load
-
-  float4* shared_a_vec = reinterpret_cast<float4*>(&shared_a[0][0]);
-  float4* shared_b_vec = reinterpret_cast<float4*>(&shared_b[0][0]);
   
   for (int tile_k_start = 0; tile_k_start < K; tile_k_start += TILESIZE) {
     int tid = threadIdx.y * blockDim.x + threadIdx.x;
@@ -61,19 +58,10 @@ __global__ void __launch_bounds__(BLOCKSIZE * BLOCKSIZE) MatmulKernel(const floa
         int global_a_row = (blockIdx.y * TILESIZE) + row;
         int global_a_col = tile_k_start + col;
         
-        // 1. Vector Load from Global (Fast)
         float4 vec_a = make_float4(0.f, 0.f, 0.f, 0.f);
         if (global_a_row < M && global_a_col < K) {
              vec_a = __ldg(reinterpret_cast<const float4*>(&a[global_a_row * K + global_a_col]));
         }
-
-        // 2. Manual Unpack to Shared (Preserves Padding)
-        // Accessing [row][col] automatically handles the stride of 34
-        shared_a[row][col + 0] = vec_a.x;
-        shared_a[row][col + 1] = vec_a.y;
-        shared_a[row][col + 2] = vec_a.z;
-        shared_a[row][col + 3] = vec_a.w;
-
 
         // --- LOAD B ---
         int global_b_row = tile_k_start + row;
@@ -83,6 +71,13 @@ __global__ void __launch_bounds__(BLOCKSIZE * BLOCKSIZE) MatmulKernel(const floa
         if (global_b_row < K && global_b_col < N) {
              vec_b = __ldg(reinterpret_cast<const float4*>(&b[global_b_row * N + global_b_col]));
         }
+        
+        // Manual Unpack to Shared (Preserves Padding)
+        // Accessing [row][col] automatically handles the stride of 34
+        shared_a[row][col + 0] = vec_a.x;
+        shared_a[row][col + 1] = vec_a.y;
+        shared_a[row][col + 2] = vec_a.z;
+        shared_a[row][col + 3] = vec_a.w;
 
         // Manual Unpack B
         shared_b[row][col + 0] = vec_b.x;
@@ -95,9 +90,6 @@ __global__ void __launch_bounds__(BLOCKSIZE * BLOCKSIZE) MatmulKernel(const floa
 
     // This thread is responsible for a patch of the output tile of dim
     // ELEMENTS_PER_THREAD x ELEMENTS_PER_THREAD.
-    // horizontally adjacent psums use the same row,
-    // vertically adjacent psums use the same column, maybe some reuse
-    // opportunity here later.
     for (int i = 0; i < ELEMENTS_PER_THREAD; ++i) {
       for (int j = 0; j < ELEMENTS_PER_THREAD; ++j) {
         int a_tile_row = shared_A_input_tile_row + i;
